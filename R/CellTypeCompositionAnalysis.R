@@ -48,7 +48,7 @@
 #'
 #' @import tibble
 #' @import dplyr
-.make_input_for_glmer <- function(Y, metadata_tbl) {
+.make_input_for_glmer <- function(Y, metadata_tbl, colSample) {
   samples <- rownames(Y)
   celltypes <- colnames(Y)
   nSample <- length(samples)
@@ -178,7 +178,7 @@ CellTypeCompositionAnalysis <- function(obs_tbl, colSample, colCelltype, colVarC
   metadata_tbl <- .make_sample_metadata(obs_tbl, colSample, colVarCats, colVarNums)
   Y <- .make_count_matrix(obs_tbl, colSample, colCelltype)
 
-  input_tbl <- .make_input_for_glmer(Y, metadata_tbl)
+  input_tbl <- .make_input_for_glmer(Y, metadata_tbl, colSample)
 
   f <- .make_formula(colSample, colVarCats, colVarNums, extra_term = extra_term)
   cat("model constructed\n")
