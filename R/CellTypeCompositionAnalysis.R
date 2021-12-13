@@ -25,13 +25,19 @@
 #' @param colSample Column in "obs_tbl" specifying sample ID (str)
 #' @param colVarCats Columns in "obs_tbl" specifying categorical variables to control for (vector of str)
 #' @param colVarNums Columns in "obs_tbl" specifying numerical variables to control for (vector of str)
+#' @param extra_term Extra term(s) to be added to the model (str or vector of str)
 #'
 #' @return tibble containing metadata for each sample, one per row
 #'
 #' @import dplyr
-.make_sample_metadata <- function(obs_tbl, colSample, colVarCats = c(), colVarNums = c()) {
+.make_sample_metadata <- function(obs_tbl, colSample, colVarCats = c(), colVarNums = c(), extra_term = NULL) {
+  if (!is.null(extra_term)) {
+    extra_vars <- unique(unlist(strsplit(extra_term, ':', fixed = T)))
+  } else {
+    extra_vars <- c()
+  }
   metadata_tbl <- obs_tbl %>%
-    select(one_of(c(colSample, colVarCats, colVarNums))) %>%
+    select(one_of(unique(c(colSample, colVarCats, colVarNums, extra_vars)))) %>%
     unique()
   metadata_tbl
 }
@@ -80,6 +86,9 @@
 #'
 #' @return formula specifying a GLMM model
 .make_formula <- function(colSample, colVarCats, colVarNums, extra_term = NULL) {
+  if (!is.null(extra_term)) {
+      extra_term <- sprintf("(1|%s)", extra_term)
+  }
   terms <- c(
     colVarNums,
     sprintf("(1|%s)", c(colSample, colVarCats)),
@@ -175,7 +184,7 @@
 #'
 #' @export
 CellTypeCompositionAnalysis <- function(obs_tbl, colSample, colCelltype, colVarCats, colVarNums, extra_term = NULL, save = NULL) {
-  metadata_tbl <- .make_sample_metadata(obs_tbl, colSample, colVarCats, colVarNums)
+  metadata_tbl <- .make_sample_metadata(obs_tbl, colSample, colVarCats, colVarNums, extra_term = extra_term)
   Y <- .make_count_matrix(obs_tbl, colSample, colCelltype)
 
   input_tbl <- .make_input_for_glmer(Y, metadata_tbl, colSample)
@@ -227,7 +236,7 @@ CellTypeCompositionAnalysis <- function(obs_tbl, colSample, colCelltype, colVarC
 #' @import ggplot2
 #'
 #' @export
-plot_sdse <- function(sdse_tbl, colSample, ci = 0.95) {
+plot_sdse <- function(sdse_tbl, colSample, ci = 0.95, xlim = c(-0.5, 1.5)) {
   n_se <- qnorm(1 - (1 - ci) / 2)
   p_tbl <- sdse_tbl %>%
     filter(
@@ -247,7 +256,7 @@ plot_sdse <- function(sdse_tbl, colSample, ci = 0.95) {
       geom_errorbarh(aes(xmin = ci_l, xmax = ci_h), height = 0) +
       geom_vline(xintercept = 0, lty = 2) +
       xlab("Square root of explained variance") +
-      coord_cartesian(xlim = c(-0.5, 1.5)) +
+      coord_cartesian(xlim = xlim) +
       theme_bw() +
       theme(axis.title.y = element_blank())
   )
@@ -271,7 +280,7 @@ plot_sdse <- function(sdse_tbl, colSample, ci = 0.95) {
 #' @importFrom scales squish
 #'
 #' @export
-plot_ranef <- function(ranef_tbl, vars = NULL, celltypes = NULL, maxFC = 3) {
+plot_ranef <- function(ranef_tbl, vars = NULL, celltypes = NULL, celltype_order = 'hclust', maxFC = 3, LTSR2p = F, filterLtsr = 0.0, swap_axes = F) {
   ranef_tbl <- .getCondValLtsr(ranef_tbl, vars = vars, celltypes = celltypes)
 
   condval_mat <- ranef_tbl %>%
@@ -285,8 +294,12 @@ plot_ranef <- function(ranef_tbl, vars = NULL, celltypes = NULL, maxFC = 3) {
       var = "Celltype"
     ) %>%
     as.matrix()
-  dendy <- hclust(dist(condval_mat))
-  ordered_celltype <- rownames(condval_mat)[dendy$ord]
+  if (length(celltype_order) == 1 && celltype_order == 'hclust') {
+    dendy <- hclust(dist(condval_mat))
+    ordered_celltype <- rownames(condval_mat)[dendy$ord]
+  } else if (!is.null(celltype_order) && length(celltype_order) == dim(condval_mat)[1]) {
+    ordered_celltype <- celltype_order
+  }
 
   ranef_tbl <- ranef_tbl %>% mutate(
     Celltype = factor(Celltype, levels = ordered_celltype),
@@ -294,26 +307,54 @@ plot_ranef <- function(ranef_tbl, vars = NULL, celltypes = NULL, maxFC = 3) {
     ltsr = ltsr %>% pmin(0.9999) %>% pmax(0.5)
   )
 
-  p <- (
-    ggplot(ranef_tbl, aes(x = grpval, y = Celltype)) +
+  if (swap_axes) {
+    ranef_tbl$Celltype <- factor(ranef_tbl$Celltype, levels = rev(levels(ranef_tbl$Celltype)))
+    ranef_tbl$grpval <- factor(ranef_tbl$grpval, levels = rev(levels(ranef_tbl$grpval)))
+  }
+
+  if (filterLtsr > 0) {
+    filtered_celltypes <- ranef_tbl %>%
+      group_by(Celltype) %>%
+      summarise(maxLtsr = max(ltsr)) %>%
+      dplyr::filter(maxLtsr >= filterLtsr) %>%
+      select(Celltype) %>%
+      unlist(use.names = F)
+    ranef_tbl <- ranef_tbl %>% dplyr::filter(Celltype %in% filtered_celltypes)
+  }
+
+  if (swap_axes) {
+    p <- (
+      ggplot(ranef_tbl, aes(y = grpval, x = Celltype)) +
+      facet_grid(grpvar ~ ., scales = "free_y", space = "free_y", switch = "x") +
+      geom_point(aes(fill = log2(exp(condval)), color = (1-ltsr) < 0.05, size = -log10(1 - ltsr)), shape = 21)
+    )
+  } else {
+    p <- (
+      ggplot(ranef_tbl, aes(x = grpval, y = Celltype)) +
       facet_grid(. ~ grpvar, scales = "free_x", space = "free_x", switch = "x") +
-      geom_point(aes(color = log2(exp(condval)), size = -log10(1 - ltsr))) +
-      scale_color_distiller(
+      geom_point(aes(fill = log2(exp(condval)), color = (1-ltsr) < 0.05, size = -log10(1 - ltsr)), shape = 21)
+    )
+  }
+
+  p <- (
+      p + scale_fill_distiller(
         palette = "RdBu", limits = log2(c(1 / maxFC, maxFC)), oob = squish,
         guide = guide_colorbar(title = "Log2FC", barwidth = 1)
       ) +
+      scale_color_manual(values = c('light grey', 'red'), guide = F) +
       scale_size(
         limits = -log10(1 - c(0.5, 0.9999)),
         breaks = -log10(1 - c(0.5, 0.9, 0.99, 0.999, 0.9999)),
-        labels = c("0.5", "0.9", "0.99", "0.999", ">0.9999"),
-        guide = guide_legend(title = "LTSR")
+        labels = ifelse(rep(LTSR2p, 5), c('0.5', '0.1', '0.01', '0.001', '<0.0001'), c("0.5", "0.9", "0.99", "0.999", ">0.9999")),
+        guide = guide_legend(title = ifelse(LTSR2p, 'p', 'LTSR'))
       ) +
       theme_bw() +
       theme(
-        axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
-        axis.title.x = element_blank(),
-        strip.placement = "outside",
-        strip.background = element_blank()
+          axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          strip.placement = "outside",
+          strip.background = element_blank()
       )
   )
+  p
 }
