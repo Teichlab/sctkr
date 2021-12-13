@@ -32,7 +32,7 @@
 #' @import dplyr
 .make_sample_metadata <- function(obs_tbl, colSample, colVarCats = c(), colVarNums = c(), extra_term = NULL) {
   if (!is.null(extra_term)) {
-    extra_vars <- unique(unlist(strsplit(extra_term, ':', fixed = T)))
+    extra_vars <- unique(unlist(strsplit(extra_term, ":", fixed = T)))
   } else {
     extra_vars <- c()
   }
@@ -87,7 +87,7 @@
 #' @return formula specifying a GLMM model
 .make_formula <- function(colSample, colVarCats, colVarNums, extra_term = NULL) {
   if (!is.null(extra_term)) {
-      extra_term <- sprintf("(1|%s)", extra_term)
+    extra_term <- sprintf("(1|%s)", extra_term)
   }
   terms <- c(
     colVarNums,
@@ -110,24 +110,58 @@
 #' @param vars A list specifying required categorical sample metadata variables and their order,
 #'     e.g. list(size=c('small', 'medium', 'big'), price=c('cheap', 'expensive'))
 #' @param celltypes If specified, only keep those cell types (vector of str)
+#' @param references If specified, fold changes are calculated relative to the specified level
+#'     instead of global mean. Must be a list, e.g. list(size='small', price='cheap')
 #'
 #' @return tibble containing mean random effects and respective LTSR
 #'
 #' @import dplyr
 #' @import tidyr
-.getCondValLtsr <- function(ranef_tbl, vars = NULL, celltypes = NULL) {
+#' @import stringr
+.getCondValLtsr <- function(ranef_tbl, vars, celltypes = NULL, references = NULL) {
+  if (!is.list(vars)) stop('"vars" must be a list of which names are co-variables to plot', call. = F)
+  if (!is.null(references) && !is.list(references)) stop('"references" must be a list of which names match that of "vars"', call. = F)
+
   ranef_tbl <- ranef_tbl %>%
     filter(
       grepl(":Celltype$", grpvar)
     ) %>%
     mutate(
       grpvar = factor(sub(":Celltype$", "", grpvar)),
-      grp = factor(ifelse(grepl(":.*:", grp), sub(":", ",", grp), as.character(grp)))
+      grp = factor(ifelse(
+        grepl(":.*:", grp),
+        sapply(str_split(grp, ":"), function(x) paste(paste(x[-length(x)], collapse = ","), x[length(x)], sep = ":")),
+        as.character(grp)
+      ))
     ) %>%
     separate(
       grp,
       into = c("grpval", "Celltype"), sep = ":"
-    ) %>%
+    )
+
+  if (!is.null(references)) {
+    ranef_tbl <- bind_rows(
+      lapply(names(vars), function(vname) {
+        if (vname %in% names(references)) {
+          ref <- references[[vname]]
+          full_join(
+            ranef_tbl %>% filter(grpvar == vname, grpval != ref),
+            ranef_tbl %>% filter(grpvar == vname, grpval == ref) %>% select(grpvar, Celltype, condval, condsd),
+            by = c("grpvar", "Celltype")
+          ) %>%
+            mutate(
+              condval = condval.x - condval.y,
+              condsd = sqrt(condsd.x^2 + condsd.y^2)
+            ) %>%
+            select(-condval.x, -condval.y, -condsd.x, -condsd.y)
+        } else {
+          return(ranef_tbl %>% filter(grpvar == vname))
+        }
+      })
+    )
+  }
+
+  ranef_tbl <- ranef_tbl %>%
     mutate(
       lfsr = pnorm(condval, 0, condsd)
     ) %>%
@@ -141,20 +175,16 @@
       grpvar, grpval, Celltype, condval, ltsr
     )
 
-  if (is.list(vars)) {
-    ranef_tbl <- ranef_tbl %>%
-      filter(
-        grpvar %in% names(vars)
-      ) %>%
-      mutate(
-        grpvar = factor(grpvar, levels = names(vars)),
-        grpval = factor(grpval, levels = unlist(vars, use.names = F))
-      )
-  } else if (!is.null(vars)) {
-    ranef_tbl <- ranef_tbl %>% filter(grpvar %in% vars)
-  }
-
   if (!is.null(celltypes)) ranef_tbl <- ranef_tbl %>% filter(Celltype %in% celltypes)
+
+  ranef_tbl <- ranef_tbl %>%
+    filter(
+      grpvar %in% names(vars)
+    ) %>%
+    mutate(
+      grpvar = factor(grpvar, levels = names(vars)),
+      grpval = factor(grpval, levels = unlist(vars, use.names = F))
+    )
 
   ranef_tbl
 }
@@ -271,7 +301,15 @@ plot_sdse <- function(sdse_tbl, colSample, ci = 0.95, xlim = c(-0.5, 1.5)) {
 #' @param vars A list specifying required categorical sample metadata variables and their order,
 #'     e.g. list(size=c('small', 'medium', 'big'), price=c('cheap', 'expensive'))
 #' @param celltypes If specified, only keep those cell types (vector of str)
+#' @param celltype_order Determine how cell types are ordered. Either "hclust" which orders by
+#'     hierarchical clustering, or a vector of cell types. (str or vector of str)
+#' @param references If specified, fold changes are calculated relative to the specified level
+#'     instead of global mean. Must be a list, e.g. list(size='small', price='cheap')
 #' @param maxFC Cap fold change by this value (numeric, default 3)
+#' @param LTSR2p Whether to convert LTSR to p value (logical, default FALSE)
+#' @param filterLtsr Only keeps cell types of which at least one LTSR is greater or equal to
+#'     specified value. (numeric, default 0)
+#' @param swap_axes Whether to swap axis when plotting (logical, default FALSE)
 #'
 #' @return ggplot object of a dot plot
 #'
@@ -280,8 +318,8 @@ plot_sdse <- function(sdse_tbl, colSample, ci = 0.95, xlim = c(-0.5, 1.5)) {
 #' @importFrom scales squish
 #'
 #' @export
-plot_ranef <- function(ranef_tbl, vars = NULL, celltypes = NULL, celltype_order = 'hclust', maxFC = 3, LTSR2p = F, filterLtsr = 0.0, swap_axes = F) {
-  ranef_tbl <- .getCondValLtsr(ranef_tbl, vars = vars, celltypes = celltypes)
+plot_ranef <- function(ranef_tbl, vars, celltypes = NULL, celltype_order = "hclust", references = NULL, maxFC = 3, LTSR2p = F, filterLtsr = 0.0, swap_axes = F) {
+  ranef_tbl <- .getCondValLtsr(ranef_tbl, vars, celltypes = celltypes, references = references)
 
   condval_mat <- ranef_tbl %>%
     select(
@@ -294,7 +332,7 @@ plot_ranef <- function(ranef_tbl, vars = NULL, celltypes = NULL, celltype_order 
       var = "Celltype"
     ) %>%
     as.matrix()
-  if (length(celltype_order) == 1 && celltype_order == 'hclust') {
+  if (length(celltype_order) == 1 && celltype_order == "hclust") {
     dendy <- hclust(dist(condval_mat))
     ordered_celltype <- rownames(condval_mat)[dendy$ord]
   } else if (!is.null(celltype_order) && length(celltype_order) == dim(condval_mat)[1]) {
@@ -325,35 +363,35 @@ plot_ranef <- function(ranef_tbl, vars = NULL, celltypes = NULL, celltype_order 
   if (swap_axes) {
     p <- (
       ggplot(ranef_tbl, aes(y = grpval, x = Celltype)) +
-      facet_grid(grpvar ~ ., scales = "free_y", space = "free_y", switch = "x") +
-      geom_point(aes(fill = log2(exp(condval)), color = (1-ltsr) < 0.05, size = -log10(1 - ltsr)), shape = 21)
+        facet_grid(grpvar ~ ., scales = "free_y", space = "free_y", switch = "x") +
+        geom_point(aes(fill = log2(exp(condval)), color = (1 - ltsr) < 0.05, size = -log10(1 - ltsr)), shape = 21)
     )
   } else {
     p <- (
       ggplot(ranef_tbl, aes(x = grpval, y = Celltype)) +
-      facet_grid(. ~ grpvar, scales = "free_x", space = "free_x", switch = "x") +
-      geom_point(aes(fill = log2(exp(condval)), color = (1-ltsr) < 0.05, size = -log10(1 - ltsr)), shape = 21)
+        facet_grid(. ~ grpvar, scales = "free_x", space = "free_x", switch = "x") +
+        geom_point(aes(fill = log2(exp(condval)), color = (1 - ltsr) < 0.05, size = -log10(1 - ltsr)), shape = 21)
     )
   }
 
   p <- (
-      p + scale_fill_distiller(
-        palette = "RdBu", limits = log2(c(1 / maxFC, maxFC)), oob = squish,
-        guide = guide_colorbar(title = "Log2FC", barwidth = 1)
-      ) +
-      scale_color_manual(values = c('light grey', 'red'), guide = F) +
+    p + scale_fill_distiller(
+      palette = "RdBu", limits = log2(c(1 / maxFC, maxFC)), oob = squish,
+      guide = guide_colorbar(title = "Log2FC", barwidth = 1)
+    ) +
+      scale_color_manual(values = c("light grey", "red"), guide = F) +
       scale_size(
         limits = -log10(1 - c(0.5, 0.9999)),
         breaks = -log10(1 - c(0.5, 0.9, 0.99, 0.999, 0.9999)),
-        labels = ifelse(rep(LTSR2p, 5), c('0.5', '0.1', '0.01', '0.001', '<0.0001'), c("0.5", "0.9", "0.99", "0.999", ">0.9999")),
-        guide = guide_legend(title = ifelse(LTSR2p, 'p', 'LTSR'))
+        labels = ifelse(rep(LTSR2p, 5), c("0.5", "0.1", "0.01", "0.001", "<0.0001"), c("0.5", "0.9", "0.99", "0.999", ">0.9999")),
+        guide = guide_legend(title = ifelse(LTSR2p, "p", "LTSR"))
       ) +
       theme_bw() +
       theme(
-          axis.title.x = element_blank(),
-          axis.title.y = element_blank(),
-          strip.placement = "outside",
-          strip.background = element_blank()
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank(),
+        strip.placement = "outside",
+        strip.background = element_blank()
       )
   )
   p
