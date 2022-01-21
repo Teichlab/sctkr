@@ -60,7 +60,7 @@
   nSample <- length(samples)
   nCelltype <- length(celltypes)
 
-  metadata_tbl <- metadata_tbl[match(metadata_tbl[[colSample]], samples), ]
+  metadata_tbl <- metadata_tbl[match(samples, metadata_tbl[[colSample]]), ]
 
   input_tbl <- bind_cols(
     metadata_tbl[rep(1:nSample, nCelltype), ],
@@ -95,7 +95,7 @@
     sprintf("(%s-1|Celltype)", colVarNums),
     sprintf("(1|%s:Celltype)", c(colSample, colVarCats))
   )
-  formula_str <- paste(c("I(c(Y)) ~ (1|Celltype)", terms, extra_term), collapse = "+")
+  formula_str <- paste(c("I(Y) ~ (1|Celltype)", terms, extra_term), collapse = "+")
   as.formula(formula_str)
 }
 
