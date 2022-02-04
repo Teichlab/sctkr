@@ -20,7 +20,7 @@ devtools::install_github("Teichlab/sctkr")
 Usage example
 ------------
 
-A simple usage example is given below, for more options, look at "?CellTypeCompositionAnalysis" and "?plot_ranef"
+A simple usage example is given below, for more options, look at `?CellTypeCompositionAnalysis` and `?plot_ranef`
 
 ``` r
 result <- CellTypeCompositionAnalysis(
