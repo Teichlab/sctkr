@@ -122,7 +122,7 @@
   if (!is.list(vars)) stop('"vars" must be a list of which names are co-variables to plot', call. = F)
   if (!is.null(references) && !is.list(references)) stop('"references" must be a list of which names match that of "vars"', call. = F)
 
-  ranef_tbl <- ranef_tbl %>%
+  cat_ranef_tbl <- ranef_tbl %>%
     filter(
       grepl(":Celltype$", grpvar)
     ) %>%
@@ -139,14 +139,27 @@
       into = c("grpval", "Celltype"), sep = ":"
     )
 
+  num_ranef_tbl <- ranef_tbl %>%
+    filter(
+      grpvar == "Celltype" & term != "(Intercept)"
+    ) %>%
+    mutate(
+      grpvar = factor(term),
+      grpval= "Slope",
+      Celltype = grp
+    ) %>%
+    select (
+      -grp
+    )
+
   if (!is.null(references)) {
-    ranef_tbl <- bind_rows(
+    cat_ranef_tbl <- bind_rows(
       lapply(names(vars), function(vname) {
         if (vname %in% names(references)) {
           ref <- references[[vname]]
           full_join(
-            ranef_tbl %>% filter(grpvar == vname, grpval != ref),
-            ranef_tbl %>% filter(grpvar == vname, grpval == ref) %>% select(grpvar, Celltype, condval, condsd),
+            cat_ranef_tbl %>% filter(grpvar == vname, grpval != ref),
+            cat_ranef_tbl %>% filter(grpvar == vname, grpval == ref) %>% select(grpvar, Celltype, condval, condsd),
             by = c("grpvar", "Celltype")
           ) %>%
             mutate(
@@ -155,11 +168,13 @@
             ) %>%
             select(-condval.x, -condval.y, -condsd.x, -condsd.y)
         } else {
-          return(ranef_tbl %>% filter(grpvar == vname))
+          return(cat_ranef_tbl %>% filter(grpvar == vname))
         }
       })
     )
   }
+
+  ranef_tbl <- bind_rows(cat_ranef_tbl, num_ranef_tbl)
 
   ranef_tbl <- ranef_tbl %>%
     mutate(
