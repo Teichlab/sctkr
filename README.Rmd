@@ -28,6 +28,31 @@ You can install the released version of sctkr from [github](https://github.com/T
 ``` r
 devtools::install_github("Teichlab/sctkr")
 ```
+
+## Usage example
+
+A simple usage example is given below, for more options, look at "?CellTypeCompositionAnalysis" and "?plot_ranef"
+
+``` r
+result <- CellTypeCompositionAnalysis(
+    obs_tbl,
+    'sample_id',
+    'my_annot',
+    colVarCats=c(
+        'Sex', 'Kit_version', 'Sample_location', 'Age_bin'
+    )
+)
+
+print(plot_ranef(
+    result$ranef,
+    vars=list(
+        Sample_location=c('Nose', 'Trachea', 'Bronchi'),
+        Age_bin=c('Neonate', 'Infant', 'Young child', 'Child', 'Adolescent', 'Adult', 'Eldly')
+    ),
+    maxFC=3
+))
+```
+
 <!--
 ## Example
 

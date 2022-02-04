@@ -17,37 +17,27 @@ You can install the released version of sctkr from [github](https://github.com/T
 devtools::install_github("Teichlab/sctkr")
 ```
 
-<!--
-## Example
+Usage example
+------------
 
-This is a basic example which shows you how to solve a common problem:
+A simple usage example is given below, for more options, look at "?CellTypeCompositionAnalysis" and "?plot_ranef"
 
+``` r
+result <- CellTypeCompositionAnalysis(
+    obs_tbl,
+    'sample_id',
+    'my_annot',
+    colVarCats=c(
+        'Sex', 'Kit_version', 'Sample_location', 'Age_bin'
+    )
+)
 
-```r
-library(sctkr)
-#> Warning: replacing previous import 'magrittr::extract' by 'tidyr::extract' when loading 'sctkr'
-## basic example code
+print(plot_ranef(
+    result$ranef,
+    vars=list(
+        Sample_location=c('Nose', 'Trachea', 'Bronchi'),
+        Age_bin=c('Neonate', 'Infant', 'Young child', 'Child', 'Adolescent', 'Adult', 'Eldly')
+    ),
+    maxFC=3
+))
 ```
-
-What is special about using `README.Rmd` instead of just `README.md`? You can include R chunks like so:
-
-
-```r
-summary(cars)
-#>      speed           dist       
-#>  Min.   : 4.0   Min.   :  2.00  
-#>  1st Qu.:12.0   1st Qu.: 26.00  
-#>  Median :15.0   Median : 36.00  
-#>  Mean   :15.4   Mean   : 42.98  
-#>  3rd Qu.:19.0   3rd Qu.: 56.00  
-#>  Max.   :25.0   Max.   :120.00
-```
-
-You'll still need to render `README.Rmd` regularly, to keep `README.md` up-to-date.
-
-You can also embed plots, for example:
-
-<img src="man/figures/README-pressure-1.png" width="100%" />
-
-In that case, don't forget to commit and push the resulting figure files, so they display on GitHub!
--->
