@@ -33,6 +33,7 @@
 .make_sample_metadata <- function(obs_tbl, colSample, colVarCats = c(), colVarNums = c(), extra_term = NULL) {
   if (!is.null(extra_term)) {
     extra_vars <- unique(unlist(strsplit(extra_term, ":", fixed = T)))
+    extra_vars <- extra_vars[extra_vars %in% colnames(obs_tbl)]
   } else {
     extra_vars <- c()
   }
@@ -228,7 +229,7 @@
 #' @import numDeriv
 #'
 #' @export
-CellTypeCompositionAnalysis <- function(obs_tbl, colSample, colCelltype, colVarCats, colVarNums, extra_term = NULL, save = NULL) {
+CellTypeCompositionAnalysis <- function(obs_tbl, colSample, colCelltype, colVarCats, colVarNums = NULL, extra_term = NULL, save = NULL) {
   metadata_tbl <- .make_sample_metadata(obs_tbl, colSample, colVarCats, colVarNums, extra_term = extra_term)
   Y <- .make_count_matrix(obs_tbl, colSample, colCelltype)
 
