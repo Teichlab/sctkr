@@ -44,7 +44,7 @@
 #' @param ... Additional options passed to `monocle3::plot_cells()`.
 #'
 #' @return A ggplot object
-plot_trajectory <- function(cds, color_cells_by, legend_loc = "on data", continuous_color = FALSE, label_graph_nodes = FALSE, ...) {
+plot_trajectory <- function(cds, color_cells_by, legend_loc = "on data", continuous_color = FALSE, label_graph_nodes = FALSE, cell_size = NULL, ...) {
   if (requireNamespace("monocle3", quietly = TRUE)) {
     if (continuous_color) {
       scale_color <- viridis::scale_color_viridis(name = color_cells_by)
@@ -53,11 +53,12 @@ plot_trajectory <- function(cds, color_cells_by, legend_loc = "on data", continu
       palette <- .make_color_palette(n_color)
       scale_color <- scale_color_manual(values = palette)
     }
+    if (is.null(cell_size)) cell_size <- 50 / sqrt(ncol(cds))
     p <- monocle3::plot_cells(
       cds,
       color_cells_by = color_cells_by, label_cell_groups = (legend_loc == "on data"), label_groups_by_cluster = FALSE,
       label_leaves = label_graph_nodes, label_branch_points = label_graph_nodes, label_roots = label_graph_nodes,
-      label_principal_points = label_graph_nodes, ...
+      label_principal_points = label_graph_nodes, cell_size = cell_size, ...
     ) + scale_color
     if (legend_loc == "none") {
       p <- p + guides(color = "none")
