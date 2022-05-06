@@ -38,27 +38,49 @@
 #' palette and some other features
 #'
 #' @param cds CDS object.
-#' @param color_cells_by Column in `colData(cds)` that dictates colouring (character).
-#' @param show_node_labels Show root, leaf and branching nodes with principal point names, default FALSE (logical).
-#' @param legend_loc Location of color legend, can be "on data", "right" or "none", default "on data" (character).
+#' @param color_cells_by Column in `colData(cds)` that dictates colouring
+#'   (character).
+#' @param legend_loc Location of color legend, can be "on data", "right" or
+#'   "none", default "on data" (character).
+#' @param color_palette Color palette to use, can be "viridis", name of brewer
+#'   pal or a vector of colors, default NULL (character).
+#' @param label_graph_nodes Show root, leaf and branching nodes with principal
+#'   point names, default "all" (character).
+#' @param cell_size Dot size for cells, if NULL set to `50/sqrt(ncol(cds))`,
+#'   default NULL (numeric).
 #' @param ... Additional options passed to `monocle3::plot_cells()`.
 #'
 #' @return A ggplot object
-plot_trajectory <- function(cds, color_cells_by, legend_loc = "on data", continuous_color = FALSE, label_graph_nodes = FALSE, cell_size = NULL, ...) {
+plot_trajectory <- function(cds, color_cells_by, legend_loc = "on data", color_palette = NULL, label_graph_nodes = FALSE, cell_size = NULL, ...) {
   if (requireNamespace("monocle3", quietly = TRUE)) {
-    if (continuous_color) {
-      scale_color <- viridis::scale_color_viridis(name = color_cells_by)
+    color_by <- colData(cds)[[color_cells_by]]
+    if (is.numeric(color_by) || color_cells_by %in% c("pseudotime")) {
+      if (is.null(color_palette)) {
+        scale_color <- viridis::scale_color_viridis(name = color_cells_by)
+      } else if (is.character(color_palette) && length(color_palette) == 1) {
+        scale_color <- scale_color_distiller(palette = colorRampPalette(color_palette))
+      } else {
+        scale_color <- scale_color_distiller(palette = color_palette)
+      }
     } else {
-      n_color <- length(unique(colData(cds)[[color_cells_by]]))
-      palette <- .make_color_palette(n_color)
-      scale_color <- scale_color_manual(values = palette)
+      n_color <- length(unique(color_by))
+      if (is.null(color_palette)) {
+        palette <- .make_color_palette(n_color)
+        scale_color <- scale_color_manual(values = palette)
+      } else if (is.character(color_palette) && length(color_palette) == 1) {
+        scale_color <- scale_color_brewer(palette = color_palette)
+      } else {
+        scale_color <- scale_color_manual(values = color_palette)
+      }
     }
     if (is.null(cell_size)) cell_size <- 50 / sqrt(ncol(cds))
     p <- monocle3::plot_cells(
       cds,
       color_cells_by = color_cells_by, label_cell_groups = (legend_loc == "on data"), label_groups_by_cluster = FALSE,
-      label_leaves = label_graph_nodes, label_branch_points = label_graph_nodes, label_roots = label_graph_nodes,
-      label_principal_points = label_graph_nodes, cell_size = cell_size, ...
+      label_leaves = any(label_graph_nodes %in% c("leaf", "all")),
+      label_branch_points = any(label_graph_nodes %in% c("branch", "branching", "all")),
+      label_roots = any(label_graph_nodes %in% c("root", "all")),
+      label_principal_points = label_graph_nodes == "all", cell_size = cell_size, ...
     ) + scale_color
     if (legend_loc == "none") {
       p <- p + guides(color = "none")
@@ -175,6 +197,8 @@ get_principal_node <- function(cds,
 #'   "HC", "HC_single", "HC_complete", "HC_average", "HC_ward", "Spectral",
 #'   "Spectral_norm", "corr" FALSE to disalbe ordering, default "Spectral" if
 #'   `package:seriation` is available otherwise "HC" (character|bool).
+#' @param rank_threshold Take only cells with expression above this threshold
+#'   when ranking genes, default 1.5 if `scale_by_gene = TRUE` else 4 (numeric),
 #' @param scale_by_gene Scale each gene to have zero mean and unit std, default
 #'   TRUE (logical),
 #' @param z_max Maximum absolute value after scaling to cap extreme values,
@@ -185,6 +209,9 @@ get_principal_node <- function(cds,
 #'   `pheatmap::pheatmap()`, default NULL.
 #' @param show_rownames Show row (gene) names in heatmap, default FALSE
 #'   (logical).
+#' @param n_genes_per_level Max of number of genes per level of a categorical
+#'   variable of cell annotation, e.g. list(celltype=20), can only specify one
+#'   variable, default NULL (list)
 #' @param palette Palette function for heatmap, default
 #'   `colorRampPalette(rev(brewer.pal(n = 100, name = "RdBu")))` (function).
 #' @param ... Additional options passed to `pheatmap::pheatmap()`.
@@ -194,6 +221,7 @@ plot_heatmap <- function(cds, genes, min_gene_sd = 0.2, min_gene_fraction=0.1,
                          n_cells = 500, order_genes_by = "Spectral",
                          rank_threshold = NULL, scale_by_gene = TRUE, z_max = 3,
                          gene_annot = NULL, cell_annot = NULL, show_rownames = FALSE,
+                         n_genes_per_level = NULL,
                          palette=ifelse(
                            scale_by_gene,
                            colorRampPalette(rev(RColorBrewer::brewer.pal(
@@ -215,7 +243,6 @@ plot_heatmap <- function(cds, genes, min_gene_sd = 0.2, min_gene_fraction=0.1,
     cell_order <- order(cell_mdat$pseudotime)
 
     X <- SummarizedExperiment::assay(cds[genes, ])
-    #X <- X[match(rownames(X), genes[genes %in% rownames(X)]), ]
 
     if (ncol(X) > n_cells) {
       cell_idx <- sort(sample(ncol(X), size = n_cells, replace = FALSE))
@@ -247,6 +274,22 @@ plot_heatmap <- function(cds, genes, min_gene_sd = 0.2, min_gene_fraction=0.1,
       X <- as.matrix(X)
     }
 
+    rank_threshold <- ifelse(is.null(rank_threshold), 0.8, rank_threshold)
+    gene_rank <- sapply(1:nrow(X), function(i) {
+      median(which(X[i, ] > quantile(X[i, ], rank_threshold)))
+    })
+
+    if (class(n_genes_per_level) == "list" && !is.null(cell_annot)) {
+      grp_var <- names(n_genes_per_level)[1]
+      groups <- cell_mdat[, grp_var]
+      max_n <- n_genes_per_level[[1]]
+      tmp_df <- data.frame(gene=rownames(X), rank=seq_len(nrow(X)), annot=groups[gene_rank])
+      selected_genes <- dplyr::slice_min(dplyr::group_by(tmp_df, annot), order_by = rank, n = max_n)$gene
+      selected_k <- rownames(X) %in% selected_genes
+      X <- X[selected_k, ]
+      gene_rank <- gene_rank[selected_k]
+    }
+
     if (order_genes_by != FALSE) {
       nr <- nrow(X)
       nc <- ncol(X)
@@ -254,13 +297,7 @@ plot_heatmap <- function(cds, genes, min_gene_sd = 0.2, min_gene_fraction=0.1,
         corrs <- sapply(1:nr, function(i) cor(X[i, ], 1:nc))
         o <- order(corrs)
       } else if (order_genes_by == "rank") {
-        threshold <- ifelse(
-          is.null(rank_threshold),
-          ifelse(scale_by_gene, 1.5, 4),
-          rank_threshold
-        )
-        rank <- sapply(1:nr, function(i) median(which(X[i, ] > threshold)))
-        o <- order(rank)
+        o <- order(gene_rank)
       } else {
         if (requireNamespace("parallelDist", quietly = TRUE)) {
           d <- parallelDist::parDist(X)
