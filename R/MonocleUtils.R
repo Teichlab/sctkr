@@ -195,8 +195,9 @@ get_principal_node <- function(cds,
 #'   then `ncol(cds)`, default 500 (integer).
 #' @param order_genes_by Method to re-order genes: "ARSA", "GW", "OLO", "TSP",
 #'   "HC", "HC_single", "HC_complete", "HC_average", "HC_ward", "Spectral",
-#'   "Spectral_norm", "corr" FALSE to disalbe ordering, default "Spectral" if
-#'   `package:seriation` is available otherwise "HC" (character|bool).
+#'   "Spectral_norm", "corr", "rank", FALSE to disalbe ordering, default
+#'   "Spectral" if `package:seriation` is available otherwise "HC"
+#'   (character|bool).
 #' @param rank_threshold Take only cells with expression above this threshold
 #'   when ranking genes, default 1.5 if `scale_by_gene = TRUE` else 4 (numeric),
 #' @param scale_by_gene Scale each gene to have zero mean and unit std, default
