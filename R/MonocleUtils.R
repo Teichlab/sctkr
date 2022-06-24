@@ -128,7 +128,7 @@ get_principal_node <- function(cds,
 
     # `node_pool` is a vector of node names restricted by `node_type`
     if (node_type == "leaf") {
-      node_pool <- names(monocle3:::leaf_nodes(cds))
+      node_pool <- names(c(monocle3:::leaf_nodes(cds), monocle3:::root_nodes(cds)))
     } else if (node_type == "branch") {
       node_pool <- names(monocle3:::branch_nodes(cds))
     } else {
