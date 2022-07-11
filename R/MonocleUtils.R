@@ -32,6 +32,92 @@
 }
 
 
+#' Add row labels to a pheatmap
+#'
+#' Selectively add row labels to a pheatmap object with pretty layout
+#' Code taken from https://stackoverflow.com/questions/52599180/partial-row-labels-heatmap-r
+#' (all credit goes to the original author) with some modifications to styling
+#'
+#' @param pheatmap A pheatmap object
+#' @param kept_labels A pheatmap object
+#' @param repel_degree A pheatmap object
+#'
+#'
+#' @return A vector of colors
+.add_flag <- function(pheatmap,
+                     kept_labels,
+                     repel_degree,
+                     add_pointer = FALSE) {
+
+  # repel_degree = number within [0, 1], which controls how much
+  #                space to allocate for repelling labels.
+  ## repel_degree = 0: spread out labels over existing range of kept labels
+  ## repel_degree = 1: spread out labels over the full y-axis
+
+  heatmap <- pheatmap$gtable
+
+  new.label <- heatmap$grobs[[which(heatmap$layout$name == "row_names")]]
+
+  # keep only labels in kept_labels, replace the rest with ""
+  new.label$label <- ifelse(new.label$label %in% kept_labels, new.label$label, "")
+
+  # calculate evenly spaced out y-axis positions
+  repelled.y <- function(d, d.select, k = repel_degree) {
+    # d = vector of distances for labels
+    # d.select = vector of T/F for which labels are significant
+
+    # recursive function to get current label positions
+    # (note the unit is "npc" for all components of each distance)
+    strip.npc <- function(dd){
+      if(!"unit.arithmetic" %in% class(dd)) {
+        return(as.numeric(dd))
+      }
+
+      d1 <- strip.npc(dd$arg1)
+      d2 <- strip.npc(dd$arg2)
+      fn <- dd$fname
+      return(lazyeval::lazy_eval(paste(d1, fn, d2)))
+    }
+
+    full.range <- sapply(seq_along(d), function(i) strip.npc(d[i]))
+    selected.range <- sapply(seq_along(d[d.select]), function(i) strip.npc(d[d.select][i]))
+
+    return(unit(
+      seq(
+        from = max(selected.range) + k*(max(full.range) - max(selected.range)),
+        to = min(selected.range) - k*(min(selected.range) - min(full.range)),
+        length.out = sum(d.select)
+      ), "npc"
+    ))
+  }
+  new.y.positions <- repelled.y(new.label$y, d.select = new.label$label != "")
+
+  if (add_pointer) {
+    new.flag <- grid::segmentsGrob(
+        x0 = new.label$x,
+        x1 = new.label$x + unit(0.07, "npc"),
+        y0 = new.label$y[new.label$label != ""],
+        y1 = new.y.positions,
+        gp = gpar(lwd = 0.5)
+    )
+    heatmap <- gtable::gtable_add_grob(x = heatmap, grobs = new.flag, t = 4, l = 4)
+
+    # shift position for selected labels
+    new.label$x <- new.label$x + unit(0.1, "npc")
+  }
+
+  new.label$y[new.label$label != ""] <- new.y.positions
+
+  # add flag to heatmap
+
+  # replace label positions in heatmap
+  heatmap$grobs[[which(heatmap$layout$name == "row_names")]] <- new.label
+
+  # return a copy of the heatmap invisibly
+  invisible(heatmap)
+}
+
+
 #' Plot trajectory
 #'
 #' This function enhances monocle3::plot_cells() including using better color
@@ -190,7 +276,9 @@ get_principal_node <- function(cds,
 #' @param cds CDS object.
 #' @param genes A vector of genes to plot (verctor of character).
 #' @param min_gene_sd Minimum gene standard deviation across cells to remove
-#'   non-variable genes. Default 0.2 (numeric).
+#'   non-variable genes, default 0.2 (numeric).
+#' @param min_gene_fraction Minimum fraction of cells the included genes are
+#'   expressed, default 0.05 (numeric).
 #' @param n_cells Number of cells to plot, down-sample to this number if fewer
 #'   then `ncol(cds)`, default 500 (integer).
 #' @param order_genes_by Method to re-order genes: "ARSA", "GW", "OLO", "TSP",
@@ -199,7 +287,7 @@ get_principal_node <- function(cds,
 #'   "Spectral" if `package:seriation` is available otherwise "HC"
 #'   (character|bool).
 #' @param rank_threshold Take only cells with expression above this threshold
-#'   when ranking genes, default 1.5 if `scale_by_gene = TRUE` else 4 (numeric),
+#'   when ranking genes, default 0.95 (numeric),
 #' @param scale_by_gene Scale each gene to have zero mean and unit std, default
 #'   TRUE (logical),
 #' @param z_max Maximum absolute value after scaling to cap extreme values,
@@ -208,21 +296,29 @@ get_principal_node <- function(cds,
 #'   `pheatmap::pheatmap()`, default NULL.
 #' @param cell_annot Annotation for cells (columns) passed to
 #'   `pheatmap::pheatmap()`, default NULL.
-#' @param show_rownames Show row (gene) names in heatmap, default FALSE
-#'   (logical).
+#' @param show_rownames Show row (gene) names in heatmap, default FALSE, can
+#'   selectively show row names if a vector of names is given (logical or vector
+#'   of character).
+#' @param show_arrows If show_rownames == TRUE, show lines linking gene names
+#'   and actual row positions, default FALSE (logical).
 #' @param n_genes_per_level Max of number of genes per level of a categorical
 #'   variable of cell annotation, e.g. list(celltype=20), can only specify one
 #'   variable, default NULL (list)
+#' @param smooth_heatmap Smooth heatmap using a kernal function, the larger the
+#'   value the more smoothing, 0 disable smoothing default 3 (integer).
 #' @param palette Palette function for heatmap, default
 #'   `colorRampPalette(rev(brewer.pal(n = 100, name = "RdBu")))` (function).
+#' @param annotation_colors Passed to pheatmap::pheatmap(), default NA.
 #' @param ... Additional options passed to `pheatmap::pheatmap()`.
 #'
 #' @return A (re-)ordered matrix for plotting
-plot_heatmap <- function(cds, genes, min_gene_sd = 0.2, min_gene_fraction=0.1,
+plot_heatmap <- function(cds, genes, min_gene_sd = 0.2, min_gene_fraction=0.05,
                          n_cells = 500, order_genes_by = "Spectral",
                          rank_threshold = NULL, scale_by_gene = TRUE, z_max = 3,
-                         gene_annot = NULL, cell_annot = NULL, show_rownames = FALSE,
+                         gene_annot = NULL, cell_annot = NULL,
+                         show_rownames = FALSE, show_arrows = FALSE,
                          n_genes_per_level = NULL,
+                         smooth_heatmap = 3,
                          palette=ifelse(
                            scale_by_gene,
                            colorRampPalette(rev(RColorBrewer::brewer.pal(
@@ -230,7 +326,9 @@ plot_heatmap <- function(cds, genes, min_gene_sd = 0.2, min_gene_fraction=0.1,
                            )),
                            colorRampPalette(
                              RColorBrewer::brewer.pal(n = 9, name = "Reds"))
-                         ), ...) {
+                         ),
+                         annotation_colors = NA,
+                         ...) {
   if (requireNamespace("monocle3", quietly = TRUE)) {
     if (class(cell_annot) == "character") {
       cell_mdat <- as.data.frame(SummarizedExperiment::colData(cds)[cell_annot])
@@ -243,7 +341,7 @@ plot_heatmap <- function(cds, genes, min_gene_sd = 0.2, min_gene_fraction=0.1,
     cell_mdat$pseudotime <- monocle3::pseudotime(cds)
     cell_order <- order(cell_mdat$pseudotime)
 
-    X <- SummarizedExperiment::assay(cds[genes, ])
+    X <- monocle3:::normalize_expr_data(cds, norm_method = "log")[genes, ]
 
     if (ncol(X) > n_cells) {
       cell_idx <- sort(sample(ncol(X), size = n_cells, replace = FALSE))
@@ -254,8 +352,6 @@ plot_heatmap <- function(cds, genes, min_gene_sd = 0.2, min_gene_fraction=0.1,
     cell_mdat <- cell_mdat[cell_order[cell_idx], ]
     X <- X[, cell_order[cell_idx]]
 
-    X <- log1p(X / (Matrix::rowSums(X) / 1e4))
-
     if (min_gene_sd > 0) {
       X_sd <- apply(X, 1, sd)
       X <- X[!is.na(X_sd) & (X_sd >= min_gene_sd), ]
@@ -263,7 +359,7 @@ plot_heatmap <- function(cds, genes, min_gene_sd = 0.2, min_gene_fraction=0.1,
 
     if (min_gene_fraction > 0) {
       X_frac1 <- Matrix::rowMeans(X > 0)
-      X <- X[(X_frac1 >= min_gene_fraction) & (X_frac1 <= 0.95), ]
+      X <- X[(X_frac1 >= min_gene_fraction) & (X_frac1 <= 0.99), ]
     }
 
     if (scale_by_gene) {
@@ -274,17 +370,26 @@ plot_heatmap <- function(cds, genes, min_gene_sd = 0.2, min_gene_fraction=0.1,
     } else {
       X <- as.matrix(X)
     }
+    if (smooth_heatmap[1] > 0) {
+      X1 <- cbind(
+        matrix(rep(X[, 1], smooth_heatmap[1]), ncol=smooth_heatmap[1]),
+        X,
+        matrix(rep(X[, ncol(X)], smooth_heatmap[1]), ncol=smooth_heatmap[1])
+      )
+      kn <- stats::kernel("daniell", smooth_heatmap[1])
+      X <- t(stats::kernapply(t(X1), kn))
+    }
 
-    rank_threshold <- ifelse(is.null(rank_threshold), 0.8, rank_threshold)
+    rank_threshold <- ifelse(is.null(rank_threshold), 0.95, rank_threshold)
     gene_rank <- sapply(1:nrow(X), function(i) {
-      median(which(X[i, ] > quantile(X[i, ], rank_threshold)))
+      as.integer(median(which(X[i, ] > quantile(X[i, ], rank_threshold))))
     })
 
     if (class(n_genes_per_level) == "list" && !is.null(cell_annot)) {
       grp_var <- names(n_genes_per_level)[1]
       groups <- cell_mdat[, grp_var]
       max_n <- n_genes_per_level[[1]]
-      tmp_df <- data.frame(gene=rownames(X), rank=seq_len(nrow(X)), annot=groups[gene_rank])
+      tmp_df <- data.frame(gene = rownames(X), rank = seq_len(nrow(X)), annot = groups[gene_rank])
       selected_genes <- dplyr::slice_min(dplyr::group_by(tmp_df, annot), order_by = rank, n = max_n)$gene
       selected_k <- rownames(X) %in% selected_genes
       X <- X[selected_k, ]
@@ -311,6 +416,18 @@ plot_heatmap <- function(cds, genes, min_gene_sd = 0.2, min_gene_fraction=0.1,
         if (cor(X[o[1], ], seq_len(ncol(X))) > 0) o <- rev(o)
       }
       X <- X[o, ]
+      gene_rank <- gene_rank[o]
+    }
+
+    if (length(smooth_heatmap) > 1 && smooth_heatmap[2] > 0) {
+      X1 <- rbind(
+        matrix(rep(X[1, ], smooth_heatmap[2]), nrow = smooth_heatmap[2], byrow = TRUE),
+        X,
+        matrix(rep(X[nrow(X), ], smooth_heatmap[2]), nrow = smooth_heatmap[2], byrow = TRUE)
+      )
+      kn <- stats::kernel("daniell", smooth_heatmap[2])
+      X <- stats::kernapply(X1, kn)
+      z_max <- min(3, max(X))
     }
 
     if (requireNamespace("pheatmap", quietly = TRUE)) {
@@ -319,11 +436,31 @@ plot_heatmap <- function(cds, genes, min_gene_sd = 0.2, min_gene_fraction=0.1,
       } else {
         breaks <- NA
       }
+      rownames_to_show <- NULL
+      if (class(show_rownames) == "character") {
+        rownames_to_show <- show_rownames
+        show_rownames <- TRUE
+      }
       p <- pheatmap::pheatmap(
         X, cluster_rows = FALSE, cluster_cols = FALSE,
         annotation_col = cell_mdat, show_rownames = show_rownames,
         show_colnames = FALSE, treeheight_row = 0, treeheight_col = 0,
-        border_color = NA, color = palette(100), breaks = breaks, ...)
+        border_color = NA, color = palette(100), breaks = breaks,
+        annotation_colors = annotation_colors,
+        silent = TRUE, ...)
+      if (!is.na(annotation_colors)[1]) {
+          grp_var <- names(annotation_colors)[1]
+          groups <- as.character(cell_mdat[, grp_var])
+          gene_label_colors <- annotation_colors[[grp_var]][groups[gene_rank]]
+          p$gtable$grobs[[which(p$gtable$layout$name == "row_names")]]$gp$col <- gene_label_colors
+      }
+      if (!is.null(rownames_to_show)) {
+        p <- .add_flag(p, rownames_to_show, 1, add_pointer = show_arrows)
+      }
+      # plot result
+      grid::grid.newpage()
+      grid::grid.draw(p)
+
     } else {
       p <- image(
         X, col = palette(100), xaxt = "n", yaxt = "n", useRaster = TRUE)
