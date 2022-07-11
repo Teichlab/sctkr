@@ -35,7 +35,8 @@
 #' Add row labels to a pheatmap
 #'
 #' Selectively add row labels to a pheatmap object with pretty layout
-#' Code taken from https://stackoverflow.com/questions/52599180/partial-row-labels-heatmap-r
+#' Code taken from
+#' https://stackoverflow.com/questions/52599180/partial-row-labels-heatmap-r
 #' (all credit goes to the original author) with some modifications to styling
 #'
 #' @param pheatmap A pheatmap object
@@ -343,6 +344,7 @@ plot_heatmap <- function(cds, genes, min_gene_sd = 0.2, min_gene_fraction=0.05,
 
     X <- monocle3:::normalize_expr_data(cds, norm_method = "log")[genes, ]
 
+    set.seed(1)
     if (ncol(X) > n_cells) {
       cell_idx <- sort(sample(ncol(X), size = n_cells, replace = FALSE))
     } else {
@@ -381,15 +383,32 @@ plot_heatmap <- function(cds, genes, min_gene_sd = 0.2, min_gene_fraction=0.05,
     }
 
     rank_threshold <- ifelse(is.null(rank_threshold), 0.95, rank_threshold)
-    gene_rank <- sapply(1:nrow(X), function(i) {
-      as.integer(median(which(X[i, ] > quantile(X[i, ], rank_threshold))))
+    gene_ranks <- lapply(1:nrow(X), function(i) {
+      which(X[i, ] > quantile(X[i, ], rank_threshold))
     })
+    names(gene_ranks) <- rownames(X)
+    gene_rank <- as.integer(sapply(gene_ranks, median))
+    names(gene_rank) <- rownames(X)
+
+    assign_group <- function(x, groups, method="majority") {
+      method <- match.arg(method, c("majority", "median"))
+      if (method == "majority") {
+        grp_name <- names(sort(-table(groups[x]))[1])
+      } else if (method == "median") {
+        grp_name <- groups[as.integer(median(x))]
+      }
+      grp_name
+    }
 
     if (class(n_genes_per_level) == "list" && !is.null(cell_annot)) {
       grp_var <- names(n_genes_per_level)[1]
       groups <- cell_mdat[, grp_var]
       max_n <- n_genes_per_level[[1]]
-      tmp_df <- data.frame(gene = rownames(X), rank = seq_len(nrow(X)), annot = groups[gene_rank])
+      tmp_df <- data.frame(
+        gene = rownames(X),
+        rank = seq_len(nrow(X)),
+        annot = sapply(gene_ranks, assign_group, groups)
+      )
       selected_genes <- dplyr::slice_min(dplyr::group_by(tmp_df, annot), order_by = rank, n = max_n)$gene
       selected_k <- rownames(X) %in% selected_genes
       X <- X[selected_k, ]
@@ -421,9 +440,14 @@ plot_heatmap <- function(cds, genes, min_gene_sd = 0.2, min_gene_fraction=0.05,
 
     if (length(smooth_heatmap) > 1 && smooth_heatmap[2] > 0) {
       X1 <- rbind(
-        matrix(rep(X[1, ], smooth_heatmap[2]), nrow = smooth_heatmap[2], byrow = TRUE),
+        matrix(
+          rep(X[1, ], smooth_heatmap[2]), nrow = smooth_heatmap[2], byrow = TRUE
+        ),
         X,
-        matrix(rep(X[nrow(X), ], smooth_heatmap[2]), nrow = smooth_heatmap[2], byrow = TRUE)
+        matrix(
+          rep(X[nrow(X), ], smooth_heatmap[2]),
+          nrow = smooth_heatmap[2], byrow = TRUE
+        )
       )
       kn <- stats::kernel("daniell", smooth_heatmap[2])
       X <- stats::kernapply(X1, kn)
@@ -448,10 +472,12 @@ plot_heatmap <- function(cds, genes, min_gene_sd = 0.2, min_gene_fraction=0.05,
         border_color = NA, color = palette(100), breaks = breaks,
         annotation_colors = annotation_colors,
         silent = TRUE, ...)
-      if (!is.na(annotation_colors)[1]) {
+      if (show_rownames && !is.na(annotation_colors)[1]) {
           grp_var <- names(annotation_colors)[1]
           groups <- as.character(cell_mdat[, grp_var])
-          gene_label_colors <- annotation_colors[[grp_var]][groups[gene_rank]]
+          gene_label_colors <- annotation_colors[[grp_var]][
+            sapply(gene_ranks[names(gene_rank)], assign_group, groups)
+          ]
           p$gtable$grobs[[which(p$gtable$layout$name == "row_names")]]$gp$col <- gene_label_colors
       }
       if (!is.null(rownames_to_show)) {
