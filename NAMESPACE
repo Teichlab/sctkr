@@ -3,6 +3,7 @@
 export(CellTypeCompositionAnalysis)
 export(plot_ranef)
 export(plot_sdse)
+export(theme_ctca)
 import(dplyr)
 import(ggplot2)
 import(lme4)
