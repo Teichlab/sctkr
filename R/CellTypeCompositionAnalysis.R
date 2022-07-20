@@ -468,7 +468,7 @@ plot_ranef <- function(ranef_tbl, vars, celltypes = NULL, celltype_order = "hclu
 #' @importFrom ggplot2 theme
 #'
 #' @export
-custom_theme <- function(...) {
+theme_ctca <- function(...) {
   theme(
     axis.text.x = element_text(angle = 45, hjust = 1),
     axis.ticks = element_blank(),
