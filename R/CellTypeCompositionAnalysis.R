@@ -86,9 +86,12 @@
 #' @param extra_term Extra term(s) to be added to the model (str or vector of str)
 #'
 #' @return formula specifying a GLMM model
-.make_formula <- function(colSample, colVarCats, colVarNums, extra_term = NULL) {
+.make_formula <- function(colSample, colCelltype, colVarCats, colVarNums, extra_term = NULL) {
   if (!is.null(extra_term)) {
-    extra_term <- sprintf("(1|%s)", extra_term)
+    extra_vars <- unique(unlist(strsplit(extra_term, ":", fixed = T)))
+    extra_vars <- extra_vars[extra_vars %in% colnames(obs_tbl)]
+    extra_vars[extra_vars == colCelltype] <- "Celltype"
+    extra_term <- sprintf("(1|%s)", paste(extra_vars, collapse = ":"))
   }
   terms <- c(
     colVarNums,
@@ -235,7 +238,7 @@ CellTypeCompositionAnalysis <- function(obs_tbl, colSample, colCelltype, colVarC
 
   input_tbl <- .make_input_for_glmer(Y, metadata_tbl, colSample)
 
-  f <- .make_formula(colSample, colVarCats, colVarNums, extra_term = extra_term)
+  f <- .make_formula(colSample, colCelltype, colVarCats, colVarNums, extra_term = extra_term)
   cat("model constructed\n")
   res.prop <- glmer(
     f,
