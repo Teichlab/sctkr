@@ -100,6 +100,7 @@
     sprintf("(1|%s:Celltype)", c(colSample, colVarCats))
   )
   formula_str <- paste(c("I(Y) ~ (1|Celltype)", terms, extra_term), collapse = "+")
+  cat(paste0(formula_str, "\n"))
   as.formula(formula_str)
 }
 
