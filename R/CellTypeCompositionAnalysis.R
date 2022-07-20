@@ -89,7 +89,6 @@
 .make_formula <- function(colSample, colCelltype, colVarCats, colVarNums, extra_term = NULL) {
   if (!is.null(extra_term)) {
     extra_vars <- unique(unlist(strsplit(extra_term, ":", fixed = T)))
-    extra_vars <- extra_vars[extra_vars %in% colnames(obs_tbl)]
     extra_vars[extra_vars == colCelltype] <- "Celltype"
     extra_term <- sprintf("(1|%s)", paste(extra_vars, collapse = ":"))
   }
