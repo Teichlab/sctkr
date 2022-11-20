@@ -1,20 +1,48 @@
 # Method and initial implementation by Natsuhiko Kumasaka (natsuhiko@github)
-# refactored and maintained by Ni Huang (nh3@github)
+# refactored, extended and maintained by Ni Huang (nh3@github)
 
-#' Make cell type by sample count matrix
+#' Make cell type by sample summary matrix
 #'
-#' This function makes cell type by sample count matrix from a cell level annotation table
+#' This function makes cell type by sample summary matrix from a cell level annotation table.
+#' If colValue == NULL, return a cell count matrix
 #'
 #' @param obs_tbl Cell level annotation table, such as AnnData.obs (data.frame-like object)
 #' @param colSample Column in "obs_tbl" specifying sample ID (str)
 #' @param colCelltype Column in "obs_tbl" specifying cell type annotation (str)
+#' @param colSelection Column in "obs_tbl" specifying a logical variable that restrict analysis to
+#'     subset of cells. This is to enable 0 counts. default NULL (str)
+#' @param colValue Column in "obs_tbl" specifying cell property, default NULL (str)
+#' @param FUNC Summarisation function, default NULL (function)
 #'
 #' @return matrix containing cell type counts of dimension nSample x nCelltype
 #'
 #' @import magrittr
-.make_count_matrix <- function(obs_tbl, colSample, colCelltype) {
-  cnt_mat <- table(obs_tbl[[colSample]], obs_tbl[[colCelltype]]) %>% as.matrix()
-  cnt_mat
+.make_data_matrix <- function(obs_tbl, colSample, colCelltype, colValue = NULL, colSelection = NULL,
+                              FUNC = NULL, fillNA = 0) {
+  options(dplyr.summarise.inform = FALSE)
+  obs_group <- obs_tbl %>% group_by(!!as.symbol(colSample), !!as.symbol(colCelltype))
+  if (is.null(colValue)) {
+    if (!is.null(colSelection)) {
+      cnt_mat <- obs_group %>%
+        summarise(v = FUNC(!!as.symbol(colSelection))) %>%
+        spread(!!as.symbol(colCelltype), v, fill = fillNA)
+    } else {
+      cnt_mat <- obs_group %>%
+        summarise(v = n()) %>%
+        spread(!!as.symbol(colCelltype), v, fill = fillNA)
+    }
+  } else {
+    if (!is.null(colSelection)) {
+      cnt_mat <- obs_group %>%
+        summarise(v = FUNC(!!as.symbol(colValue)[!!as.symbol(colSelection)])) %>%
+        spread(!!as.symbol(colCelltype), v, fill = fillNA)
+    } else {
+      cnt_mat <- obs_group %>%
+        summarise(v = FUNC(!!as.symbol(colValue))) %>%
+        spread(!!as.symbol(colCelltype), v, fill = fillNA)
+    }
+  }
+  cnt_mat %>% column_to_rownames(colSample) %>% as.matrix()
 }
 
 #' Make sample level metadata table
@@ -30,7 +58,8 @@
 #' @return tibble containing metadata for each sample, one per row
 #'
 #' @import dplyr
-.make_sample_metadata <- function(obs_tbl, colSample, colVarCats = c(), colVarNums = c(), extra_term = NULL) {
+.make_sample_metadata <- function(obs_tbl, colSample, colVarCats = c(), colVarNums = c(),
+                                  extra_term = NULL) {
   if (!is.null(extra_term)) {
     extra_vars <- unique(unlist(strsplit(extra_term, ":", fixed = T)))
     extra_vars <- extra_vars[extra_vars %in% colnames(obs_tbl)]
@@ -40,6 +69,10 @@
   metadata_tbl <- obs_tbl %>%
     select(one_of(unique(c(colSample, colVarCats, colVarNums, extra_vars)))) %>%
     unique()
+
+  if (length(unique(metadata_tbl[[colSample]])) < nrow(metadata_tbl)) {
+    stop(paste(colSample, "not unique in metadata_tbl"))
+  }
   metadata_tbl
 }
 
@@ -111,7 +144,7 @@
 #'
 #' @param ranef_tbl Table of random effect estimates (mean and sd) extracted from fitted model
 #'     (data.frame-like object)
-#' @param vars A list specifying required categorical sample metadata variables and their order,
+#' @param var_list A list specifying required categorical sample metadata variables and their order,
 #'     e.g. list(size=c('small', 'medium', 'big'), price=c('cheap', 'expensive'))
 #' @param celltypes If specified, only keep those cell types (vector of str)
 #' @param references If specified, fold changes are calculated relative to the specified level
@@ -122,9 +155,13 @@
 #' @import dplyr
 #' @import tidyr
 #' @import stringr
-.getCondValLtsr <- function(ranef_tbl, vars, celltypes = NULL, references = NULL) {
-  if (!is.list(vars)) stop('"vars" must be a list of which names are co-variables to plot', call. = F)
-  if (!is.null(references) && !is.list(references)) stop('"references" must be a list of which names match that of "vars"', call. = F)
+.getCondValLtsr <- function(ranef_tbl, var_list, celltypes = NULL, references = NULL) {
+  if (!is.list(var_list)) {
+    stop('"var_list" must be a list of which names are co-variables to plot', call. = F)
+  }
+  if (!is.null(references) && !is.list(references)) {
+    stop('"references" must be a list of which names match that of "var_list"', call. = F)
+  }
 
   cat_ranef_tbl <- ranef_tbl %>%
     filter(
@@ -134,7 +171,9 @@
       grpvar = factor(sub(":Celltype$", "", grpvar)),
       grp = factor(ifelse(
         grepl(":.*:", grp),
-        sapply(str_split(grp, ":"), function(x) paste(paste(x[-length(x)], collapse = ","), x[length(x)], sep = ":")),
+        sapply(str_split(grp, ":"), function(x) {
+          paste(paste(x[-length(x)], collapse = ","), x[length(x)], sep = ":")
+        }),
         as.character(grp)
       ))
     ) %>%
@@ -158,12 +197,14 @@
 
   if (!is.null(references)) {
     cat_ranef_tbl <- bind_rows(
-      lapply(names(vars), function(vname) {
+      lapply(names(var_list), function(vname) {
         if (vname %in% names(references)) {
           ref <- references[[vname]]
           full_join(
             cat_ranef_tbl %>% filter(grpvar == vname, grpval != ref),
-            cat_ranef_tbl %>% filter(grpvar == vname, grpval == ref) %>% select(grpvar, Celltype, condval, condsd),
+            cat_ranef_tbl %>%
+              filter(grpvar == vname, grpval == ref) %>%
+              select(grpvar, Celltype, condval, condsd),
             by = c("grpvar", "Celltype")
           ) %>%
             mutate(
@@ -182,7 +223,7 @@
 
   ranef_tbl <- ranef_tbl %>%
     mutate(
-      lfsr = pnorm(condval, 0, condsd)
+      lfsr = ifelse(condval == 0 & condsd == 0, 0.5, pnorm(condval, 0, condsd))
     ) %>%
     mutate(
       lfsr = ifelse(lfsr > 0.5, 1 - lfsr, lfsr)
@@ -198,28 +239,39 @@
 
   ranef_tbl <- ranef_tbl %>%
     filter(
-      grpvar %in% names(vars)
+      grpvar %in% names(var_list)
     ) %>%
     mutate(
-      grpvar = factor(grpvar, levels = names(vars)),
-      grpval = factor(grpval, levels = unlist(vars, use.names = F))
-    )
+      grpvar = factor(grpvar, levels = names(var_list)),
+      grpval = factor(grpval, levels = unlist(var_list, use.names = F))
+    ) %>%
+    drop_na()
 
   ranef_tbl
 }
 
-#' Cell type composition analysis
+#' Single cell differential abundance analysis
 #'
-#' This function performs cell type composition analysis across samples grouped by certain metadata
-#' variable while controling for other variables, by fitting a Poisson Generalised Linear Mixed
-#' Model
+#' This function performs differential abundance analysis across samples grouped
+#' by certain metadata variable while controling for specified co-variables, by
+#' fitting a Generalised Linear Mixed Model
 #'
 #' @param obs_tbl Cell level annotation table, such as AnnData.obs (data.frame-like object)
 #' @param colSample Column in "obs_tbl" specifying sample ID (str)
 #' @param colCelltype Column in "obs_tbl" specifying cell type annotation (str)
-#' @param colVarCats Columns in "obs_tbl" specifying categorical variables to control for (vector of str)
-#' @param colVarNums Columns in "obs_tbl" specifying numerical variables to control for (vector of str)
-#' @param extra_term Extra term(s) to be added to the model (str or vector of str)
+#' @param colValue Column in "obs_tbl" specifying cell proporty for which differential abundance is
+#'     tested. If NULL, test for counts. default NULL (str)
+#' @param func If "colValue" is specified, summarise by sample and cell type with this function,
+#'     default NULL (str)
+#' @param colVarCats Columns in "obs_tbl" specifying categorical variables to control for, default:
+#'     NULL (vector of str)
+#' @param colVarNums Columns in "obs_tbl" specifying numerical variables to control for, default:
+#'     NULL (vector of str)
+#' @param colSelection Column in "obs_tbl" specifying a logical variable that restrict analysis to
+#'     subset of cells. This is to enable 0 counts. default NULL (str)
+#' @param extra_term Extra term(s) to be added to the model, default: NULL (str or vector of str)
+#' @param family Model used by glm() that describes the distribution of cell property being tested.
+#'     Use poisson for counts, gaussian (usually) for others. Default: poisson
 #' @param save If specified, used as file name prefix to save returned values (str)
 #'
 #' @return list containing two tables, 1) estimated random effects, 2) estimated explained variance
@@ -232,9 +284,17 @@
 #' @import numDeriv
 #'
 #' @export
-CellTypeCompositionAnalysis <- function(obs_tbl, colSample, colCelltype, colVarCats, colVarNums = NULL, extra_term = NULL, save = NULL) {
-  metadata_tbl <- .make_sample_metadata(obs_tbl, colSample, colVarCats, colVarNums, extra_term = extra_term)
-  Y <- .make_count_matrix(obs_tbl, colSample, colCelltype)
+DifferentialAbundanceAnalysis <- function(obs_tbl, colSample, colCelltype, colValue = NULL,
+                                          func = NULL, colVarCats = NULL, colVarNums = NULL,
+                                          colSelection = NULL, extra_term = NULL, family = NULL,
+                                          save = NULL) {
+  if (is.null(colValue) && is.null(family)) family <- poisson()
+  metadata_tbl <- .make_sample_metadata(
+    obs_tbl, colSample, colVarCats, colVarNums, extra_term = extra_term
+  )
+  Y <- .make_data_matrix(
+    obs_tbl, colSample, colCelltype, colValue = colValue, colSelection = colSelection, FUNC = func
+  )
 
   input_tbl <- .make_input_for_glmer(Y, metadata_tbl, colSample)
 
@@ -242,7 +302,7 @@ CellTypeCompositionAnalysis <- function(obs_tbl, colSample, colCelltype, colVarC
   cat("model constructed\n")
   res.prop <- glmer(
     f,
-    data = input_tbl, family = poisson,
+    data = input_tbl, family = family,
     control = glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e5))
   )
   cat("model fitted\n")
@@ -317,7 +377,7 @@ plot_sdse <- function(sdse_tbl, colSample, ci = 0.95, xlim = c(-0.5, 1.5)) {
 #'
 #' @param ranef_tbl Table of random effect estimates (mean and sd) extracted from fitted model
 #'     (data.frame-like object)
-#' @param vars A list specifying required categorical sample metadata variables and their order,
+#' @param var_list A list specifying required categorical sample metadata variables and their order,
 #'     e.g. list(size=c('small', 'medium', 'big'), price=c('cheap', 'expensive'))
 #' @param celltypes If specified, only keep those cell types (vector of str)
 #' @param celltype_order Determine how cell types are ordered. Either "hclust" which orders by
@@ -329,6 +389,7 @@ plot_sdse <- function(sdse_tbl, colSample, ci = 0.95, xlim = c(-0.5, 1.5)) {
 #' @param filterLtsr Only keeps cell types of which at least one LTSR is greater or equal to
 #'     specified value. (numeric, default 0)
 #' @param swap_axes Whether to swap axis when plotting (logical, default FALSE)
+#' @param do_plot If FALSE, return data instead of making plot (logical, default TRUE)
 #'
 #' @return ggplot object of a dot plot
 #'
@@ -337,9 +398,10 @@ plot_sdse <- function(sdse_tbl, colSample, ci = 0.95, xlim = c(-0.5, 1.5)) {
 #' @importFrom scales squish
 #'
 #' @export
-plot_ranef <- function(ranef_tbl, vars, celltypes = NULL, celltype_order = "hclust", references = NULL,
-                       maxFC = 3, LTSR2p = F, highlightLtsr = 0.0, filterLtsr = 0.0, swap_axes = F) {
-  ranef_tbl <- .getCondValLtsr(ranef_tbl, vars, celltypes = celltypes, references = references)
+plot_ranef <- function(ranef_tbl, var_list, celltypes = NULL, celltype_order = "hclust",
+                       references = NULL, maxFC = 3, LTSR2p = F, highlightLtsr = 0.0,
+                       filterLtsr = 0.0, swap_axes = F, do_plot = TRUE) {
+  ranef_tbl <- .getCondValLtsr(ranef_tbl, var_list, celltypes = celltypes, references = references)
 
   condval_mat <- ranef_tbl %>%
     select(
@@ -357,6 +419,8 @@ plot_ranef <- function(ranef_tbl, vars, celltypes = NULL, celltype_order = "hclu
     ordered_celltype <- rownames(condval_mat)[dendy$ord]
   } else if (!is.null(celltype_order) && length(celltype_order) == dim(condval_mat)[1]) {
     ordered_celltype <- celltype_order
+  } else {
+    ordered_celltype <- rownames(condval_mat)
   }
 
   ranef_tbl <- ranef_tbl %>% mutate(
@@ -379,6 +443,8 @@ plot_ranef <- function(ranef_tbl, vars, celltypes = NULL, celltype_order = "hclu
       unlist(use.names = F)
     ranef_tbl <- ranef_tbl %>% dplyr::filter(Celltype %in% filtered_celltypes)
   }
+
+  if (!do_plot) return(ranef_tbl)
 
   geom_dots <- geom_point(
     aes(
