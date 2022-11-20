@@ -155,7 +155,9 @@
 #' @import dplyr
 #' @import tidyr
 #' @import stringr
-.getCondValLtsr <- function(ranef_tbl, var_list, celltypes = NULL, references = NULL) {
+#'
+#' @export
+getCondValLtsr <- function(ranef_tbl, var_list, celltypes = NULL, references = NULL) {
   if (!is.list(var_list)) {
     stop('"var_list" must be a list of which names are co-variables to plot', call. = F)
   }
@@ -401,19 +403,14 @@ plot_sdse <- function(sdse_tbl, colSample, ci = 0.95, xlim = c(-0.5, 1.5)) {
 plot_ranef <- function(ranef_tbl, var_list, celltypes = NULL, celltype_order = "hclust",
                        references = NULL, maxFC = 3, LTSR2p = F, highlightLtsr = 0.0,
                        filterLtsr = 0.0, swap_axes = F, do_plot = TRUE) {
-  ranef_tbl <- .getCondValLtsr(ranef_tbl, var_list, celltypes = celltypes, references = references)
+  ranef_tbl <- getCondValLtsr(ranef_tbl, var_list, celltypes = celltypes, references = references)
 
   condval_mat <- ranef_tbl %>%
-    select(
-      Celltype, grpval, condval
-    ) %>%
-    spread(
-      "grpval", "condval"
-    ) %>%
-    column_to_rownames(
-      var = "Celltype"
-    ) %>%
+    select(Celltype, grpval, condval) %>%
+    spread("grpval", "condval") %>%
+    column_to_rownames(var = "Celltype") %>%
     as.matrix()
+
   if (length(celltype_order) == 1 && celltype_order == "hclust") {
     dendy <- hclust(dist(condval_mat))
     ordered_celltype <- rownames(condval_mat)[dendy$ord]
