@@ -157,7 +157,7 @@
 #' @import stringr
 #'
 #' @export
-getCondValLtsr <- function(ranef_tbl, var_list, celltypes = NULL, references = NULL) {
+getCondValLtsr <- function(ranef_tbl, var_list, celltypes = NULL, references = NULL, adjp = "fdr") {
   if (!is.list(var_list)) {
     stop('"var_list" must be a list of which names are co-variables to plot', call. = F)
   }
@@ -248,6 +248,10 @@ getCondValLtsr <- function(ranef_tbl, var_list, celltypes = NULL, references = N
       grpval = factor(grpval, levels = unlist(var_list, use.names = F))
     ) %>%
     drop_na()
+
+  if (!is.null(adjp) && !is.na(adjp) && adjp != FALSE) {
+    ranef_tbl <- ranef_tbl %>% mutate(ltsr = 1 - p.adjust(1 - ltsr, method = adjp))
+  }
 
   ranef_tbl
 }
@@ -401,9 +405,11 @@ plot_sdse <- function(sdse_tbl, colSample, ci = 0.95, xlim = c(-0.5, 1.5)) {
 #'
 #' @export
 plot_ranef <- function(ranef_tbl, var_list, celltypes = NULL, celltype_order = "hclust",
-                       references = NULL, maxFC = 3, LTSR2p = F, highlightLtsr = 0.0,
+                       references = NULL, maxFC = 3, LTSR2p = F, adjp = T, highlightLtsr = 0.0,
                        filterLtsr = 0.0, swap_axes = F, do_plot = TRUE) {
-  ranef_tbl <- getCondValLtsr(ranef_tbl, var_list, celltypes = celltypes, references = references)
+  ranef_tbl <- getCondValLtsr(
+    ranef_tbl, var_list, celltypes = celltypes, references = references, adjp = adjp
+  )
 
   condval_mat <- ranef_tbl %>%
     select(Celltype, grpval, condval) %>%
